@@ -1,18 +1,3 @@
-# --- شروع راه حل موقت برای پایتون 3.13 ---
-# این بخش ماژول imghdr را شبیه‌سازی می‌کند تا از خطا جلوگیری شود.
-try:
-    import imghdr
-except ImportError:
-    import sys
-    import types
-    # ایجاد یک ماژول ساختگی برای imghdr
-    dummy_imghdr = types.ModuleType('imghdr')
-    # تابع what در کتابخانه تلگرام استفاده می‌شود، ما یک نسخه خالی از آن را ایجاد می‌کنیم.
-    dummy_imghdr.what = lambda file, h=None: None
-    sys.modules['imghdr'] = dummy_imghdr
-# --- پایان راه حل موقت ---
-
-
 import logging
 import os
 import asyncio
