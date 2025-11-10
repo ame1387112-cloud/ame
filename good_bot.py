@@ -2,6 +2,7 @@ import logging
 import os
 import asyncio
 import json
+from typing import Dict, List, Tuple, Optional, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackContext
 from telegram.error import BadRequest, NetworkError, TimedOut
@@ -14,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 # توکن ربات شما
 TOKEN = "6542041216:AAEubrn5Ds8IYPWNIzr36I_XxfD114TlB58"
-ADMIN_USER_ID =6196578711
+ADMIN_USER_ID = 6196578711
 
 # نام فایل‌های پیکربندی 
 CONFIG_FILE = 'config.json'
 MEDIA_MAP_FILE = 'media_map.json'
 
 # بارگذاری تنظیمات از فایل
-def load_config():
+def load_config() -> Dict[str, Any]:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -38,12 +39,12 @@ def load_config():
     return default_config
 
 # ذخیره تنظیمات در فایل
-def save_config(config):
+def save_config(config: Dict[str, Any]) -> None:
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
 
 # بارگذاری نقشه رسانه‌ها از فایل
-def load_media_map():
+def load_media_map() -> Dict[str, List[int]]:
     if os.path.exists(MEDIA_MAP_FILE):
         with open(MEDIA_MAP_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -52,15 +53,15 @@ def load_media_map():
         "2": [43, 44, 45, 46, 47, 48, 49],
         "3": [50, 51, 52, 53, 54, 55],
         "4": [56],
-	"5": [58],
-	"6": [59], 
-	"7": [61, 62, 63],
+        "5": [58],
+        "6": [59], 
+        "7": [61, 62, 63],
     }
     save_media_map(default_map)
     return default_map
 
 # ذخیره نقشه رسانه‌ها در فایل
-def save_media_map(media_map):
+def save_media_map(media_map: Dict[str, List[int]]) -> None:
     with open(MEDIA_MAP_FILE, 'w', encoding='utf-8') as f:
         json.dump(media_map, f, ensure_ascii=False, indent=4)
 
@@ -175,7 +176,7 @@ async def delete_media_command(update: Update, context: CallbackContext) -> None
 
 
 # این تابع عضویت کاربر را در کانال‌های اجباری بررسی می‌کند
-async def check_membership(context: CallbackContext, user_id: int) -> (bool, list):
+async def check_membership(context: CallbackContext, user_id: int) -> Tuple[bool, List[Tuple[str, str]]]:
     unchecked_channels = []
     is_member_of_checkable_channels = True
     # استفاده از لیست کانال‌ها از فایل کانفیگ
@@ -202,7 +203,7 @@ async def check_membership(context: CallbackContext, user_id: int) -> (bool, lis
 
 
 # این تابع پیام‌ها را پس از 60 ثانیه حذف کرده و یک پیام متنی جدید ارسال می‌کند
-async def schedule_self_destruct(context: CallbackContext, chat_id: int, message_ids: list[int]):
+async def schedule_self_destruct(context: CallbackContext, chat_id: int, message_ids: List[int]) -> None:
     await asyncio.sleep(60)
     try:
         for message_id in message_ids:
@@ -214,7 +215,7 @@ async def schedule_self_destruct(context: CallbackContext, chat_id: int, message
 
 
 # این تابع رسانه(ها) را ارسال کرده و سپس پیام تبلیغاتی VIP را می‌فرستد
-async def send_media_by_keyword(update: Update, context: CallbackContext, keyword: str):
+async def send_media_by_keyword(update: Update, context: CallbackContext, keyword: str) -> None:
     message_ids = MEDIA_MAP.get(keyword)
     if not message_ids:
         await update.message.reply_text("رسانه‌ای برای این لینک پیدا نشد.")
@@ -315,10 +316,14 @@ def main() -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error('Exception while handling an update: %s', context.error)
     try:
-        if isinstance(context.error, NetworkError): await update.message.reply_text("خطای شبکه! لطفاً بعداً تلاش کنید.")
-        elif isinstance(context.error, TimedOut): await update.message.reply_text("زمان اتصال به سرور تمام شد! لطفاً بعداً تلاش کنید.")
-        else: await update.message.reply_text("خطایی رخ داد. لطفاً بعداً تلاش کنید.")
-    except Exception: pass
+        if isinstance(context.error, NetworkError): 
+            await update.message.reply_text("خطای شبکه! لطفاً بعداً تلاش کنید.")
+        elif isinstance(context.error, TimedOut): 
+            await update.message.reply_text("زمان اتصال به سرور تمام شد! لطفاً بعداً تلاش کنید.")
+        else: 
+            await update.message.reply_text("خطایی رخ داد. لطفاً بعداً تلاش کنید.")
+    except Exception: 
+        pass
 
 if __name__ == '__main__':
     main()
