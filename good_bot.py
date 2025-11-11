@@ -9,6 +9,8 @@ from telegram.error import BadRequest, NetworkError, TimedOut
 import threading
 import http.server
 import socketserver
+import time
+import requests
 
 def keep_alive():
     PORT = 10000
@@ -17,6 +19,15 @@ def keep_alive():
         httpd.serve_forever()
 
 threading.Thread(target=keep_alive, daemon=True).start()
+def auto_ping():
+    url = "https://good-bot-v5lz.onrender.com"  # آدرس Render خودت
+    while True:
+        try:
+            requests.get(url)
+            print("🔁 Ping sent successfully.")
+        except Exception as e:
+            print("Ping failed:", e)
+        time.sleep(600)  # هر 10 دقیقه یکبار پینگ
 
 # فعال‌سازی لاگ
 logging.basicConfig(
@@ -333,4 +344,5 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
 if __name__ == '__main__':
     main()
+
 
