@@ -18,7 +18,6 @@ def keep_alive():
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
         httpd.serve_forever()
 
-threading.Thread(target=keep_alive, daemon=True).start()
 def auto_ping():
     url = "https://good-bot-v5lz.onrender.com"  # آدرس Render خودت
     while True:
@@ -28,6 +27,9 @@ def auto_ping():
         except Exception as e:
             print("Ping failed:", e)
         time.sleep(600)  # هر 10 دقیقه یکبار پینگ
+threading.Thread(target=keep_alive, daemon=True).start()
+
+threading.Thread(target=auto_ping, daemon=True).start()
 
 # فعال‌سازی لاگ
 logging.basicConfig(
@@ -344,5 +346,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
 if __name__ == '__main__':
     main()
+
 
 
