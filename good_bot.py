@@ -5,6 +5,18 @@ import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackContext
 from telegram.error import BadRequest, NetworkError, TimedOut
+# برای Render (جلوگیری از timeout)
+import threading
+import http.server
+import socketserver
+
+def keep_alive():
+    PORT = 10000
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        httpd.serve_forever()
+
+threading.Thread(target=keep_alive, daemon=True).start()
 
 # فعال‌سازی لاگ
 logging.basicConfig(
@@ -12,9 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# توکن ربات شما
-TOKEN = "6542041216:AAEubrn5Ds8IYPWNIzr36I_XxfD114TlB58"
-ADMIN_USER_ID =6196578711
+TOKEN = os.getenv("TOKEN")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
 # نام فایل‌های پیکربندی 
 CONFIG_FILE = 'config.json'
@@ -322,3 +333,4 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
 if __name__ == '__main__':
     main()
+
