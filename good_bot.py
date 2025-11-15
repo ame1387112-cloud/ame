@@ -14,7 +14,7 @@ import time
 import requests
 
 def keep_alive():
-    PORT = 10000
+    PORT = int(os.environ.get('PORT', 10000))
     Handler = http.server.SimpleHTTPRequestHandler
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
         httpd.serve_forever()
@@ -27,9 +27,9 @@ def auto_ping():
             print("🔁 Ping sent successfully.")
         except Exception as e:
             print("Ping failed:", e)
-        time.sleep(60)  # هر 10 دقیقه یکبار پینگ
-threading.Thread(target=keep_alive, daemon=True).start()
+        time.sleep(60)  # هر 1 دقیقه یکبار پینگ
 
+threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=auto_ping, daemon=True).start()
 
 # فعال‌سازی لاگ
@@ -101,9 +101,21 @@ def github_update_file(path: str, content_str: str, commit_message: str) -> bool
         logger.error("❌ Failed to update %s on GitHub: %s %s", path, put.status_code, put.text)
         return False
 
-def github_update_file_background(path: str, content_str: str, commit_message: str) -> None:
-    """انتشار به گیت‌هاب در یک ترد جدا تا بلوک نشود."""
-    threading.Thread(target=github_update_file, args=(path, content_str, commit_message), daemon=True).start()
+def github_update_file_background(path: str, content_str: str, commit_message: str) -> bool:
+    """
+    انتشارات به گیت‌هاب در یک ترد جدا تا بلوک نشود.
+    این نسخه بهبود یافته یک مقدار بازگشتی دارد که نشان می‌دهد آیا عملیات موفقیت‌آمیز بوده است یا خیر.
+    """
+    result = threading.Event()
+    result_container = {'success': False}
+    
+    def update_task():
+        result_container['success'] = github_update_file(path, content_str, commit_message)
+        result.set()
+    
+    threading.Thread(target=update_task, daemon=True).start()
+    result.wait(timeout=30)  # منتظر می‌مانیم تا حداکثر ۳۰ ثانیه عملیات تمام شود
+    return result_container['success']
 
 # بارگذاری تنظیمات از فایل
 def load_config():
@@ -129,9 +141,10 @@ def save_config(config):
     # ارسال به گیت‌هاب در پس‌زمینه
     try:
         json_text = json.dumps(config, ensure_ascii=False, indent=4)
-        github_update_file_background(CONFIG_FILE, json_text, "Update config.json via bot")
+        return github_update_file_background(CONFIG_FILE, json_text, "Update config.json via bot")
     except Exception as e:
         logger.warning("Could not push config to GitHub in background: %s", e)
+        return False
 
 # بارگذاری نقشه رسانه‌ها از فایل
 def load_media_map():
@@ -157,9 +170,10 @@ def save_media_map(media_map):
     # ارسال به گیت‌هاب در پس‌زمینه
     try:
         json_text = json.dumps(media_map, ensure_ascii=False, indent=4)
-        github_update_file_background(MEDIA_MAP_FILE, json_text, "Update media_map.json via bot")
+        return github_update_file_background(MEDIA_MAP_FILE, json_text, "Update media_map.json via bot")
     except Exception as e:
         logger.warning("Could not push media_map to GitHub in background: %s", e)
+        return False
 
 # بارگذاری اولیه تنظیمات و رسانه‌ها
 CONFIG = load_config()
@@ -183,13 +197,19 @@ async def add_channel_command(update: Update, context: CallbackContext) -> None:
         return
 
     CONFIG['required_channels'].append({"id": channel_id, "name": channel_name})
-    save_config(CONFIG)
-    await update.message.reply_text(f"✅ کانال '{channel_name}' با موفقیت اضافه شد.")
-    logger.info(f"Admin added channel: {channel_id} ({channel_name})")
-    if not GITHUB_TOKEN:
-        await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+    
+    # ذخیره محلی و ارسال به گیت‌هاب
+    saved_locally = True  # همیشه ذخیره محلی موفق است
+    github_success = save_config(CONFIG)
+    
+    if saved_locally and github_success:
+        await update.message.reply_text(f"✅ کانال '{channel_name}' با موفقیت اضافه شد و در گیت‌هاب ذخیره گردید.")
+    elif saved_locally:
+        await update.message.reply_text(f"✅ کانال '{channel_name}' با موفقیت اضافه شد اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید.")
     else:
-        await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
+        await update.message.reply_text(f"❌ خطا در ذخیره کانال '{channel_name}'.")
+    
+    logger.info(f"Admin added channel: {channel_id} ({channel_name})")
 
 async def list_channels_command(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_USER_ID:
@@ -219,13 +239,18 @@ async def remove_channel_command(update: Update, context: CallbackContext) -> No
     CONFIG['required_channels'] = [ch for ch in CONFIG['required_channels'] if ch['id'] != channel_id_to_remove]
 
     if len(CONFIG['required_channels']) < original_length:
-        save_config(CONFIG)
-        await update.message.reply_text(f"✅ کانال '{channel_id_to_remove}' با موفقیت حذف شد.")
-        logger.info(f"Admin removed channel: {channel_id_to_remove}")
-        if not GITHUB_TOKEN:
-            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        # ذخیره محلی و ارسال به گیت‌هاب
+        saved_locally = True  # همیشه ذخیره محلی موفق است
+        github_success = save_config(CONFIG)
+        
+        if saved_locally and github_success:
+            await update.message.reply_text(f"✅ کانال '{channel_id_to_remove}' با موفقیت حذف شد و در گیت‌هاب ذخیره گردید.")
+        elif saved_locally:
+            await update.message.reply_text(f"✅ کانال '{channel_id_to_remove}' با موفقیت حذف شد اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید.")
         else:
-            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
+            await update.message.reply_text(f"❌ خطا در حذف کانال '{channel_id_to_remove}'.")
+            
+        logger.info(f"Admin removed channel: {channel_id_to_remove}")
     else:
         await update.message.reply_text(f"کانال '{channel_id_to_remove}' در لیست یافت نشد.")
 # --- پایان بخش جدید ---
@@ -243,13 +268,19 @@ async def add_media_command(update: Update, context: CallbackContext) -> None:
     try:
         message_ids = list(map(int, context.args[1:]))
         MEDIA_MAP[keyword] = message_ids
-        save_media_map(MEDIA_MAP)
-        await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با {len(message_ids)} آیدی با موفقیت آپدیت شد.")
-        logger.info(f"Admin updated keyword '{keyword}' with IDs: {message_ids}")
-        if not GITHUB_TOKEN:
-            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        
+        # ذخیره محلی و ارسال به گیت‌هاب
+        saved_locally = True  # همیشه ذخیره محلی موفق است
+        github_success = save_media_map(MEDIA_MAP)
+        
+        if saved_locally and github_success:
+            await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با {len(message_ids)} آیدی با موفقیت آپدیت شد و در گیت‌هاب ذخیره گردید.")
+        elif saved_locally:
+            await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با {len(message_ids)} آیدی با موفقیت آپدیت شد اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید.")
         else:
-            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
+            await update.message.reply_text(f"❌ خطا در آپدیت کلمه کلیدی '{keyword}'.")
+            
+        logger.info(f"Admin updated keyword '{keyword}' with IDs: {message_ids}")
     except ValueError:
         await update.message.reply_text("خطا: تمام آیدی‌ها باید عدد باشند. مثال: /addmedia مجموعه_جدید 25 26 27")
 
@@ -275,17 +306,74 @@ async def delete_media_command(update: Update, context: CallbackContext) -> None
     keyword = context.args[0]
     if keyword in MEDIA_MAP:
         del MEDIA_MAP[keyword]
-        save_media_map(MEDIA_MAP)
-        await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با موفقیت حذف شد.")
-        logger.info(f"Admin deleted keyword '{keyword}'.")
-        if not GITHUB_TOKEN:
-            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        
+        # ذخیره محلی و ارسال به گیت‌هاب
+        saved_locally = True  # همیشه ذخیره محلی موفق است
+        github_success = save_media_map(MEDIA_MAP)
+        
+        if saved_locally and github_success:
+            await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با موفقیت حذف شد و در گیت‌هاب ذخیره گردید.")
+        elif saved_locally:
+            await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با موفقیت حذف شد اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید.")
         else:
-            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
+            await update.message.reply_text(f"❌ خطا در حذف کلمه کلیدی '{keyword}'.")
+            
+        logger.info(f"Admin deleted keyword '{keyword}'.")
     else:
         await update.message.reply_text(f"کلمه کلیدی '{keyword}' یافت نشد.")
 # --- پایان بخش جدید ---
 
+# دستور جدید برای بررسی وضعیت همگام‌سازی با گیت‌هاب
+async def sync_status_command(update: Update, context: CallbackContext) -> None:
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
+        return
+    
+    if not GITHUB_TOKEN:
+        await update.message.reply_text("⚠️ توکن گیت‌هاب تنظیم نشده است. همگام‌سازی با گیت‌هاب غیرفعال است.")
+        return
+    
+    await update.message.reply_text("🔄 در حال بررسی وضعیت همگام‌سازی با گیت‌هاب...")
+    
+    # بررسی وضعیت فایل کانفیگ
+    config_api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{CONFIG_FILE}"
+    media_api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{MEDIA_MAP_FILE}"
+    
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    try:
+        # بررسی فایل کانفیگ
+        config_response = requests.get(config_api_url, params={"ref": GITHUB_BRANCH}, headers=headers, timeout=15)
+        media_response = requests.get(media_api_url, params={"ref": GITHUB_BRANCH}, headers=headers, timeout=15)
+        
+        status_text = "📊 وضعیت همگام‌سازی با گیت‌هاب:\n\n"
+        
+        if config_response.status_code == 200:
+            config_data = json.loads(base64.b64decode(config_response.json()['content']).decode('utf-8'))
+            if json.dumps(config_data, sort_keys=True) == json.dumps(CONFIG, sort_keys=True):
+                status_text += "✅ فایل config.json همگام است.\n"
+            else:
+                status_text += "⚠️ فایل config.json با نسخه محلی متفاوت است.\n"
+        else:
+            status_text += "❌ فایل config.json در گیت‌هاب یافت نشد.\n"
+        
+        if media_response.status_code == 200:
+            media_data = json.loads(base64.b64decode(media_response.json()['content']).decode('utf-8'))
+            if json.dumps(media_data, sort_keys=True) == json.dumps(MEDIA_MAP, sort_keys=True):
+                status_text += "✅ فایل media_map.json همگام است.\n"
+            else:
+                status_text += "⚠️ فایل media_map.json با نسخه محلی متفاوت است.\n"
+        else:
+            status_text += "❌ فایل media_map.json در گیت‌هاب یافت نشد.\n"
+        
+        await update.message.reply_text(status_text)
+        
+    except Exception as e:
+        logger.error(f"Error checking sync status: {e}")
+        await update.message.reply_text(f"❌ خطا در بررسی وضعیت همگام‌سازی: {str(e)}")
 
 # این تابع عضویت کاربر را در کانال‌های اجباری بررسی می‌کند
 async def check_membership(context: CallbackContext, user_id: int) -> (bool, list):
@@ -353,7 +441,7 @@ async def send_media_by_keyword(update: Update, context: CallbackContext, keywor
             await asyncio.sleep(2)
             await update.message.reply_text(
                 "🔥 برای دسترسی به هزاران محتوای بیشتر و بدون محدودیت، عضو کانال VIP ما شوید!\n\n"
-                "💰 هزینه اشتراک: یک بار برای همیشه\n\n"
+                "💰 هزینه اشتراک:یک بار برای همیشه\n\n"
                 "👤 برای عضویت و اطلاعات بیشتر، به آیدی زیر پیام دهید:\n"
                 f"**{CONFIG['payment_contact_id']}**",
                 parse_mode='Markdown'
@@ -407,8 +495,8 @@ async def start(update: Update, context: CallbackContext) -> None:
 
 
 def main() -> None:
-    if ADMIN_USER_ID == 123456789:
-        print("⚠️ لطفاً ابتدا ADMIN_USER_ID را در کد خود با آیدی عددی خودتان جایگزین کنید.")
+    if ADMIN_USER_ID == 0:
+        print("⚠️ لطفاً ابتدا ADMIN_USER_ID را در متغیرهای محیطی تنظیم کنید.")
         return
     print("ربات با قابلیت مدیریت کامل از راه دور راه‌اندازی شد.")
     application = Application.builder().token(TOKEN).connect_timeout(20.0).read_timeout(90.0).write_timeout(90.0).pool_timeout(10.0).build()
@@ -419,6 +507,7 @@ def main() -> None:
     application.add_handler(CommandHandler("addmedia", add_media_command))
     application.add_handler(CommandHandler("listmedia", list_media_command))
     application.add_handler(CommandHandler("deletemedia", delete_media_command))
+    application.add_handler(CommandHandler("syncstatus", sync_status_command))  # دستور جدید برای بررسی وضعیت همگام‌سازی
     # هندلرهای اصلی
     application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
@@ -428,10 +517,17 @@ def main() -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error('Exception while handling an update: %s', context.error)
     try:
-        if isinstance(context.error, NetworkError): await update.message.reply_text("خطای شبکه! لطفاً بعداً تلاش کنید.")
-        elif isinstance(context.error, TimedOut): await update.message.reply_text("زمان اتصال به سرور تمام شد! لطفاً بعداً تلاش کنید.")
-        else: await update.message.reply_text("خطایی رخ داد. لطفاً بعداً تلاش کنید.")
-    except Exception: pass
+        if isinstance(context.error, NetworkError): 
+            if update and hasattr(update, 'message'):
+                await update.message.reply_text("خطای شبکه! لطفاً بعداً تلاش کنید.")
+        elif isinstance(context.error, TimedOut): 
+            if update and hasattr(update, 'message'):
+                await update.message.reply_text("زمان اتصال به سرور تمام شد! لطفاً بعداً تلاش کنید.")
+        else: 
+            if update and hasattr(update, 'message'):
+                await update.message.reply_text("خطایی رخ داد. لطفاً بعداً تلاش کنید.")
+    except Exception: 
+        pass
 
 if __name__ == '__main__':
     main()
