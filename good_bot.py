@@ -27,7 +27,7 @@ def auto_ping():
             print("🔁 Ping sent successfully.")
         except Exception as e:
             print("Ping failed:", e)
-        time.sleep(60)  # هر 1 دقیقه یکبار پینگ
+        time.sleep(180)  # هر 3 دقیقه یکبار پینگ
 
 threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=auto_ping, daemon=True).start()
