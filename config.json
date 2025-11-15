@@ -1,0 +1,14 @@
+{
+    "required_channels": [
+        {
+            "id": "@aeah1am",
+            "name": "کانال اول"
+        },
+        {
+            "id": "@VelvetWhisper_AY",
+            "name": "کانال دوم"
+        }
+    ],
+    "payment_contact_id": "@uhftgrt",
+    "source_channel_id": -1003251983791
+}
