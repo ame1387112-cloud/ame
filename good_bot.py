@@ -2,6 +2,7 @@ import logging
 import os
 import asyncio
 import json
+import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackContext
 from telegram.error import BadRequest, NetworkError, TimedOut
@@ -40,9 +41,69 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv("TOKEN")
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
+# GitHub settings (set these environment variables)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # باید با دسترسی repo:contents ساخته شود
+GITHUB_OWNER = os.getenv("GITHUB_OWNER", "ame1387112-cloud")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "ame")
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+
 # نام فایل‌های پیکربندی 
 CONFIG_FILE = 'config.json'
 MEDIA_MAP_FILE = 'media_map.json'
+
+# --- GitHub helper functions ---
+def github_update_file(path: str, content_str: str, commit_message: str) -> bool:
+    """
+    آپدیت یا ایجاد فایل در مخزن گیت‌هاب. برمی‌گرداند True در صورت موفقیت.
+    این تابع هم‌زمان (synchronous) است و در یک thread جدا اجرا می‌شود تا هندلرهای async را مسدود نکند.
+    """
+    if not GITHUB_TOKEN:
+        logger.warning("GITHUB_TOKEN not set; skipping GitHub update for %s", path)
+        return False
+    api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    # get current file sha (اگر وجود داشته باشد)
+    try:
+        r = requests.get(api_url, params={"ref": GITHUB_BRANCH}, headers=headers, timeout=15)
+    except Exception as e:
+        logger.error("Failed to GET %s from GitHub: %s", api_url, e)
+        return False
+
+    if r.status_code == 200:
+        sha = r.json().get("sha")
+    elif r.status_code == 404:
+        sha = None
+    else:
+        logger.error("Unexpected status getting %s: %s %s", api_url, r.status_code, r.text)
+        return False
+
+    payload = {
+        "message": commit_message,
+        "content": base64.b64encode(content_str.encode('utf-8')).decode('utf-8'),
+        "branch": GITHUB_BRANCH
+    }
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        put = requests.put(api_url, json=payload, headers=headers, timeout=20)
+    except Exception as e:
+        logger.error("Failed to PUT %s to GitHub: %s", api_url, e)
+        return False
+
+    if put.status_code in (200, 201):
+        logger.info("✅ Updated %s on GitHub (%s).", path, put.status_code)
+        return True
+    else:
+        logger.error("❌ Failed to update %s on GitHub: %s %s", path, put.status_code, put.text)
+        return False
+
+def github_update_file_background(path: str, content_str: str, commit_message: str) -> None:
+    """انتشار به گیت‌هاب در یک ترد جدا تا بلوک نشود."""
+    threading.Thread(target=github_update_file, args=(path, content_str, commit_message), daemon=True).start()
 
 # بارگذاری تنظیمات از فایل
 def load_config():
@@ -65,6 +126,12 @@ def load_config():
 def save_config(config):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
+    # ارسال به گیت‌هاب در پس‌زمینه
+    try:
+        json_text = json.dumps(config, ensure_ascii=False, indent=4)
+        github_update_file_background(CONFIG_FILE, json_text, "Update config.json via bot")
+    except Exception as e:
+        logger.warning("Could not push config to GitHub in background: %s", e)
 
 # بارگذاری نقشه رسانه‌ها از فایل
 def load_media_map():
@@ -76,9 +143,9 @@ def load_media_map():
         "2": [43, 44, 45, 46, 47, 48, 49],
         "3": [50, 51, 52, 53, 54, 55],
         "4": [56],
-	"5": [58],
-	"6": [59], 
-	"7": [61, 62, 63],
+        "5": [58],
+        "6": [59],
+        "7": [61, 62, 63],
     }
     save_media_map(default_map)
     return default_map
@@ -87,6 +154,12 @@ def load_media_map():
 def save_media_map(media_map):
     with open(MEDIA_MAP_FILE, 'w', encoding='utf-8') as f:
         json.dump(media_map, f, ensure_ascii=False, indent=4)
+    # ارسال به گیت‌هاب در پس‌زمینه
+    try:
+        json_text = json.dumps(media_map, ensure_ascii=False, indent=4)
+        github_update_file_background(MEDIA_MAP_FILE, json_text, "Update media_map.json via bot")
+    except Exception as e:
+        logger.warning("Could not push media_map to GitHub in background: %s", e)
 
 # بارگذاری اولیه تنظیمات و رسانه‌ها
 CONFIG = load_config()
@@ -100,10 +173,10 @@ async def add_channel_command(update: Update, context: CallbackContext) -> None:
     if len(context.args) < 2:
         await update.message.reply_text("مثال: /addchannel @newchannel نام_کانال_جدید")
         return
-    
+
     channel_id = context.args[0]
     channel_name = " ".join(context.args[1:])
-    
+
     # جلوگیری از تکرار
     if any(ch['id'] == channel_id for ch in CONFIG['required_channels']):
         await update.message.reply_text("این کانال از قبل در لیست وجود دارد.")
@@ -113,20 +186,24 @@ async def add_channel_command(update: Update, context: CallbackContext) -> None:
     save_config(CONFIG)
     await update.message.reply_text(f"✅ کانال '{channel_name}' با موفقیت اضافه شد.")
     logger.info(f"Admin added channel: {channel_id} ({channel_name})")
+    if not GITHUB_TOKEN:
+        await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+    else:
+        await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
 
 async def list_channels_command(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_USER_ID:
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
-    
+
     if not CONFIG['required_channels']:
         await update.message.reply_text("هیچ کانال اجباری تعریف نشده است.")
         return
-    
+
     response_text = "📋 لیست کانال‌های اجباری:\n\n"
     for ch in CONFIG['required_channels']:
         response_text += f"• **{ch['name']}** (`{ch['id']}`)\n"
-    
+
     await update.message.reply_text(response_text, parse_mode='Markdown')
 
 async def remove_channel_command(update: Update, context: CallbackContext) -> None:
@@ -136,15 +213,19 @@ async def remove_channel_command(update: Update, context: CallbackContext) -> No
     if not context.args:
         await update.message.reply_text("مثال: /removechannel @newchannel")
         return
-    
+
     channel_id_to_remove = context.args[0]
     original_length = len(CONFIG['required_channels'])
     CONFIG['required_channels'] = [ch for ch in CONFIG['required_channels'] if ch['id'] != channel_id_to_remove]
-    
+
     if len(CONFIG['required_channels']) < original_length:
         save_config(CONFIG)
         await update.message.reply_text(f"✅ کانال '{channel_id_to_remove}' با موفقیت حذف شد.")
         logger.info(f"Admin removed channel: {channel_id_to_remove}")
+        if not GITHUB_TOKEN:
+            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        else:
+            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
     else:
         await update.message.reply_text(f"کانال '{channel_id_to_remove}' در لیست یافت نشد.")
 # --- پایان بخش جدید ---
@@ -165,6 +246,10 @@ async def add_media_command(update: Update, context: CallbackContext) -> None:
         save_media_map(MEDIA_MAP)
         await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با {len(message_ids)} آیدی با موفقیت آپدیت شد.")
         logger.info(f"Admin updated keyword '{keyword}' with IDs: {message_ids}")
+        if not GITHUB_TOKEN:
+            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        else:
+            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
     except ValueError:
         await update.message.reply_text("خطا: تمام آیدی‌ها باید عدد باشند. مثال: /addmedia مجموعه_جدید 25 26 27")
 
@@ -193,6 +278,10 @@ async def delete_media_command(update: Update, context: CallbackContext) -> None
         save_media_map(MEDIA_MAP)
         await update.message.reply_text(f"✅ کلمه کلیدی '{keyword}' با موفقیت حذف شد.")
         logger.info(f"Admin deleted keyword '{keyword}'.")
+        if not GITHUB_TOKEN:
+            await update.message.reply_text("⚠️ توجه: GITHUB_TOKEN تنظیم نشده است؛ تغییرات فقط محلی ذخیره شدند.")
+        else:
+            await update.message.reply_text("♻️ تغییرات به صورت خودکار به مخزن GitHub ارسال شدند (پس‌زمینه).")
     else:
         await update.message.reply_text(f"کلمه کلیدی '{keyword}' یافت نشد.")
 # --- پایان بخش جدید ---
@@ -346,7 +435,3 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
 if __name__ == '__main__':
     main()
-
-
-
-
