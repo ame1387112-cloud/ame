@@ -39,7 +39,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+# تغییر: پشتیبانی از چندین مدیر
+ADMIN_USER_IDS = [int(id) for id in os.getenv("ADMIN_USER_IDS", "0").split(",")]
+# برای سازگاری با کد قبلی
+ADMIN_USER_ID = ADMIN_USER_IDS[0] if ADMIN_USER_IDS else 0
+# تغییر: تعریف ابر مدیر (فقط شما می‌توانید مدیران را حذف کنید)
+SUPER_ADMIN_ID = 6196578711
 
 # GitHub settings (set these environment variables)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # باید با دسترسی repo:contents ساخته شود
@@ -129,7 +134,9 @@ def load_config():
             {"id": "@VelvetWhisper_AY", "name": "کانال دوم"}
         ],
         "payment_contact_id": "@uhftgrt",
-        "source_channel_id": -1003251983791
+        "source_channel_id": -1003251983791,
+        # تغییر: اضافه کردن لیست مدیران به کانفیگ
+        "admin_ids": [SUPER_ADMIN_ID, 8068113172]  # شما و مدیر جدید
     }
     save_config(default_config)
     return default_config
@@ -141,7 +148,12 @@ def save_config(config):
     # ارسال به گیت‌هاب در پس‌زمینه
     try:
         json_text = json.dumps(config, ensure_ascii=False, indent=4)
-        return github_update_file_background(CONFIG_FILE, json_text, "Update config.json via bot")
+        success = github_update_file_background(CONFIG_FILE, json_text, "Update config.json via bot")
+        if success:
+            logger.info("✅ Configuration successfully synced to GitHub")
+        else:
+            logger.warning("⚠️ Failed to sync configuration to GitHub")
+        return success
     except Exception as e:
         logger.warning("Could not push config to GitHub in background: %s", e)
         return False
@@ -170,7 +182,12 @@ def save_media_map(media_map):
     # ارسال به گیت‌هاب در پس‌زمینه
     try:
         json_text = json.dumps(media_map, ensure_ascii=False, indent=4)
-        return github_update_file_background(MEDIA_MAP_FILE, json_text, "Update media_map.json via bot")
+        success = github_update_file_background(MEDIA_MAP_FILE, json_text, "Update media_map.json via bot")
+        if success:
+            logger.info("✅ Media map successfully synced to GitHub")
+        else:
+            logger.warning("⚠️ Failed to sync media map to GitHub")
+        return success
     except Exception as e:
         logger.warning("Could not push media_map to GitHub in background: %s", e)
         return False
@@ -179,9 +196,21 @@ def save_media_map(media_map):
 CONFIG = load_config()
 MEDIA_MAP = load_media_map()
 
+# تغییر: تابع بررسی دسترسی مدیر
+def is_admin(user_id):
+    # اگر در کانفیگ مدیران تعریف شده باشند، از آن استفاده کن
+    if 'admin_ids' in CONFIG:
+        return user_id in CONFIG['admin_ids']
+    # در غیر این صورت از متغیر محیطی استفاده کن
+    return user_id in ADMIN_USER_IDS
+
+# تغییر: تابع بررسی دسترسی ابر مدیر (فقط برای حذف مدیر)
+def is_super_admin(user_id):
+    return user_id == SUPER_ADMIN_ID
+
 # --- شروع بخش جدید: دستورات مدیریتی برای کانال‌ها ---
 async def add_channel_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     if len(context.args) < 2:
@@ -212,7 +241,7 @@ async def add_channel_command(update: Update, context: CallbackContext) -> None:
     logger.info(f"Admin added channel: {channel_id} ({channel_name})")
 
 async def list_channels_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
 
@@ -227,7 +256,7 @@ async def list_channels_command(update: Update, context: CallbackContext) -> Non
     await update.message.reply_text(response_text, parse_mode='Markdown')
 
 async def remove_channel_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     if not context.args:
@@ -258,7 +287,7 @@ async def remove_channel_command(update: Update, context: CallbackContext) -> No
 
 # --- شروع بخش جدید: دستورات مدیریتی برای رسانه ---
 async def add_media_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     if len(context.args) < 2:
@@ -285,7 +314,7 @@ async def add_media_command(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("خطا: تمام آیدی‌ها باید عدد باشند. مثال: /addmedia مجموعه_جدید 25 26 27")
 
 async def list_media_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     if not MEDIA_MAP:
@@ -297,7 +326,7 @@ async def list_media_command(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(response_text, parse_mode='Markdown')
 
 async def delete_media_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     if not context.args:
@@ -325,7 +354,7 @@ async def delete_media_command(update: Update, context: CallbackContext) -> None
 
 # دستور جدید برای بررسی وضعیت همگام‌سازی با گیت‌هاب
 async def sync_status_command(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_USER_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
         return
     
@@ -369,11 +398,119 @@ async def sync_status_command(update: Update, context: CallbackContext) -> None:
         else:
             status_text += "❌ فایل media_map.json در گیت‌هاب یافت نشد.\n"
         
+        # اضافه کردن اطلاعات مدیران
+        if 'admin_ids' in CONFIG:
+            status_text += f"\n👥 تعداد مدیران: {len(CONFIG['admin_ids'])} نفر"
+        
         await update.message.reply_text(status_text)
         
     except Exception as e:
         logger.error(f"Error checking sync status: {e}")
         await update.message.reply_text(f"❌ خطا در بررسی وضعیت همگام‌سازی: {str(e)}")
+
+# تغییر: دستور جدید برای مدیریت مدیران
+async def add_admin_command(update: Update, context: CallbackContext) -> None:
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
+        return
+    if not context.args:
+        await update.message.reply_text("مثال: /addadmin 123456789")
+        return
+    
+    try:
+        new_admin_id = int(context.args[0])
+        if 'admin_ids' not in CONFIG:
+            CONFIG['admin_ids'] = ADMIN_USER_IDS
+        
+        if new_admin_id in CONFIG['admin_ids']:
+            await update.message.reply_text("این کاربر از قبل مدیر است.")
+            return
+        
+        CONFIG['admin_ids'].append(new_admin_id)
+        saved_locally = True
+        github_success = save_config(CONFIG)
+        
+        if saved_locally and github_success:
+            await update.message.reply_text(
+                f"✅ کاربر با آیدی {new_admin_id} با موفقیت به لیست مدیران اضافه شد.\n"
+                f"📁 این تغییر در گیت‌هاب نیز ذخیره گردید."
+            )
+        elif saved_locally:
+            await update.message.reply_text(
+                f"✅ کاربر با آیدی {new_admin_id} با موفقیت به لیست مدیران اضافه شد.\n"
+                f"⚠️ اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید."
+            )
+        else:
+            await update.message.reply_text(f"❌ خطا در افزودن مدیر جدید.")
+            
+        logger.info(f"Admin added new admin: {new_admin_id}")
+    except ValueError:
+        await update.message.reply_text("خطا: آیدی باید عدد باشد. مثال: /addadmin 123456789")
+
+async def remove_admin_command(update: Update, context: CallbackContext) -> None:
+    # تغییر: فقط ابر مدیر می‌تواند مدیران را حذف کند
+    if not is_super_admin(update.effective_user.id):
+        await update.message.reply_text("⚠️ فقط مدیر اصلی می‌تواند مدیران را حذف کند.")
+        return
+    if not context.args:
+        await update.message.reply_text("مثال: /removeadmin 123456789")
+        return
+    
+    try:
+        admin_id_to_remove = int(context.args[0])
+        if 'admin_ids' not in CONFIG:
+            await update.message.reply_text("هیچ لیست مدیرانی در تنظیمات یافت نشد.")
+            return
+        
+        if admin_id_to_remove not in CONFIG['admin_ids']:
+            await update.message.reply_text("این کاربر در لیست مدیران یافت نشد.")
+            return
+        
+        # جلوگیری از حذف آخرین مدیر
+        if len(CONFIG['admin_ids']) <= 1:
+            await update.message.reply_text("خطا: نمی‌توان آخرین مدیر را حذف کرد.")
+            return
+        
+        CONFIG['admin_ids'].remove(admin_id_to_remove)
+        saved_locally = True
+        github_success = save_config(CONFIG)
+        
+        if saved_locally and github_success:
+            await update.message.reply_text(
+                f"✅ کاربر با آیدی {admin_id_to_remove} با موفقیت از لیست مدیران حذف شد.\n"
+                f"📁 این تغییر در گیت‌هاب نیز ذخیره گردید."
+            )
+        elif saved_locally:
+            await update.message.reply_text(
+                f"✅ کاربر با آیدی {admin_id_to_remove} با موفقیت از لیست مدیران حذف شد.\n"
+                f"⚠️ اما در گیت‌هاب ذخیره نشد. لطفاً تنظیمات گیت‌هاب را بررسی کنید."
+            )
+        else:
+            await update.message.reply_text(f"❌ خطا در حذف مدیر.")
+            
+        logger.info(f"Super admin removed admin: {admin_id_to_remove}")
+    except ValueError:
+        await update.message.reply_text("خطا: آیدی باید عدد باشد. مثال: /removeadmin 123456789")
+
+async def list_admins_command(update: Update, context: CallbackContext) -> None:
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("این دستور فقط برای مدیر مجاز است.")
+        return
+    
+    if 'admin_ids' not in CONFIG:
+        await update.message.reply_text("هیچ لیست مدیرانی در تنظیمات یافت نشد.")
+        return
+    
+    response_text = "📋 لیست مدیران ربات:\n\n"
+    for admin_id in CONFIG['admin_ids']:
+        if admin_id == SUPER_ADMIN_ID:
+            response_text += f"• `{admin_id}` 👑 (مدیر اصلی)\n"
+        else:
+            response_text += f"• `{admin_id}`\n"
+    
+    response_text += "\n💡 نکته: لیست مدیران در گیت‌هاب ذخیره می‌شود و پس از ری‌استارت ربات باقی می‌ماند."
+    
+    await update.message.reply_text(response_text, parse_mode='Markdown')
 
 # این تابع عضویت کاربر را در کانال‌های اجباری بررسی می‌کند
 async def check_membership(context: CallbackContext, user_id: int) -> (bool, list):
@@ -508,6 +645,10 @@ def main() -> None:
     application.add_handler(CommandHandler("listmedia", list_media_command))
     application.add_handler(CommandHandler("deletemedia", delete_media_command))
     application.add_handler(CommandHandler("syncstatus", sync_status_command))  # دستور جدید برای بررسی وضعیت همگام‌سازی
+    # تغییر: اضافه کردن دستورات مدیریت مدیران
+    application.add_handler(CommandHandler("addadmin", add_admin_command))
+    application.add_handler(CommandHandler("removeadmin", remove_admin_command))
+    application.add_handler(CommandHandler("listadmins", list_admins_command))
     # هندلرهای اصلی
     application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
