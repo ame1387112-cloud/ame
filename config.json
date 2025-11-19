@@ -10,5 +10,9 @@
         }
     ],
     "payment_contact_id": "@uhftgrt",
-    "source_channel_id": -1003251983791
+    "source_channel_id": -1003251983791,
+    "admin_ids": [
+        6196578711,
+        8068113172
+    ]
 }
