@@ -38,11 +38,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- متغیرهای اصلی از محیط ---
 TOKEN = os.getenv("TOKEN")
-# تغییر: پشتیبانی از چندین مدیر
-ADMIN_USER_IDS = [int(id) for id in os.getenv("ADMIN_USER_IDS", "0").split(",")]
-# برای سازگاری با کد قبلی
-ADMIN_USER_ID = ADMIN_USER_IDS[0] if ADMIN_USER_IDS else 0
 # تغییر: تعریف ابر مدیر (فقط شما می‌توانید مدیران را حذف کنید)
 SUPER_ADMIN_ID = 6196578711
 
@@ -135,8 +132,8 @@ def load_config():
         ],
         "payment_contact_id": "@uhftgrt",
         "source_channel_id": -1003251983791,
-        # تغییر: اضافه کردن لیست مدیران به کانفیگ
-        "admin_ids": [SUPER_ADMIN_ID, 8068113172]  # شما و مدیر جدید
+        # تغییر: اضافه کردن لیست مدیران به کانفیگ پیش‌فرض
+        "admin_ids": [SUPER_ADMIN_ID]  # به طور پیش‌فرض فقط ابر مدیر مدیر است
     }
     save_config(default_config)
     return default_config
@@ -196,13 +193,13 @@ def save_media_map(media_map):
 CONFIG = load_config()
 MEDIA_MAP = load_media_map()
 
-# تغییر: تابع بررسی دسترسی مدیر
+# تغییر: تابع بررسی دسترسی مدیر (فقط از کانفیگ می‌خواند)
 def is_admin(user_id):
-    # اگر در کانفیگ مدیران تعریف شده باشند، از آن استفاده کن
+    # اگر کلید admin_ids در کانفیگ وجود داشته باشد، از آن استفاده کن
     if 'admin_ids' in CONFIG:
         return user_id in CONFIG['admin_ids']
-    # در غیر این صورت از متغیر محیطی استفاده کن
-    return user_id in ADMIN_USER_IDS
+    # اگر وجود نداشت، هیچ‌کس مدیر نیست
+    return False
 
 # تغییر: تابع بررسی دسترسی ابر مدیر (فقط برای حذف مدیر)
 def is_super_admin(user_id):
@@ -420,7 +417,7 @@ async def add_admin_command(update: Update, context: CallbackContext) -> None:
     try:
         new_admin_id = int(context.args[0])
         if 'admin_ids' not in CONFIG:
-            CONFIG['admin_ids'] = ADMIN_USER_IDS
+            CONFIG['admin_ids'] = [SUPER_ADMIN_ID]
         
         if new_admin_id in CONFIG['admin_ids']:
             await update.message.reply_text("این کاربر از قبل مدیر است.")
@@ -632,10 +629,15 @@ async def start(update: Update, context: CallbackContext) -> None:
 
 
 def main() -> None:
-    if ADMIN_USER_ID == 0:
-        print("⚠️ لطفاً ابتدا ADMIN_USER_ID را در متغیرهای محیطی تنظیم کنید.")
+    # تغییر: بررسی می‌کنیم که آیا فایل کانفیگ و لیست مدیران به درستی بارگذاری شده‌اند
+    if not CONFIG or 'admin_ids' not in CONFIG or not CONFIG['admin_ids']:
+        print("⚠️ فایل config.json یافت نشد یا لیست مدیران در آن خالی است. ربات نمی‌تواند شروع به کار کند.")
         return
-    print("ربات با قابلیت مدیریت کامل از راه دور راه‌اندازی شد.")
+    if not TOKEN:
+        print("⚠️ متغیر محیطی TOKEN تنظیم نشده است. ربات نمی‌تواند شروع به کار کند.")
+        return
+
+    print("✅ ربات با موفقیت راه‌اندازی شد. تمام تنظیمات از فایل config.json خوانده می‌شود.")
     application = Application.builder().token(TOKEN).connect_timeout(20.0).read_timeout(90.0).write_timeout(90.0).pool_timeout(10.0).build()
     # اضافه کردن تمام هندلرهای مدیریتی
     application.add_handler(CommandHandler("addchannel", add_channel_command))
@@ -650,10 +652,10 @@ def main() -> None:
     application.add_handler(CommandHandler("removeadmin", remove_admin_command))
     application.add_handler(CommandHandler("listadmins", list_admins_command))
     # هندلرهای اصلی
-    application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
+    application.add_error_handler(error_handler)
     application.run_polling()
-    logger.info("ربات با قابلیت مدیریت کامل از راه دور با موفقیت شروع به کار کرد!")
+    logger.info("ربات با موفقیت شروع به کار کرد!")
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error('Exception while handling an update: %s', context.error)
